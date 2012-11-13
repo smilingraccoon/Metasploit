@@ -18,9 +18,9 @@ class Metasploit3 < Msf::Post
 		super(
 			'Name'         => 'Windows Local Admin Search',
 			'Description'  => %q{
-				This module will identify systems in a given range that the supplied domain  
+				This module will identify systems in a given range that the supplied domain
 				user (should migrate into a user pid) can enumerate logged in users and group
-				membership via windows api NetWkstaUserEnum and NetUserGetGroups. 
+				membership via windows api NetWkstaUserEnum and NetUserGetGroups.
 				},
 			'License'      => MSF_LICENSE,
 			'Version'      => '$Revision: 14767 $',
@@ -183,29 +183,27 @@ class Metasploit3 < Msf::Post
 	# http://msdn.microsoft.com/en-us/library/windows/desktop/ms684323(v=vs.85).aspx
 	# method to connect to remote host using windows api
 	def connect(host)
-        user = client.sys.config.getuid
-		
-        # Check is user has administrator rights, required for user enumeration to work properly
-        adv = client.railgun.advapi32
-        manag = adv.OpenSCManagerA("\\\\#{host}", nil, 0xF003F)
-        
-        if(manag["return"] != 0) # we have admin rights
-            result = ""
-          
+		# Check is user has administrator rights, required for user enumeration to work properly
+		adv = client.railgun.advapi32
+		manag = adv.OpenSCManagerA("\\\\#{host}", nil, 0xF003F)
+
+		if(manag["return"] != 0) # we have admin rights
+			result = ""
+
 			# Run enumerate users on all hosts if option was set
-    		enum_users(host).each {|i|
+			enum_users(host).each {|i|
 				result << i
 			}
-			
+
 			# close the handle if connection was made
-            adv.CloseServiceHandle(manag["return"])
-			
+			adv.CloseServiceHandle(manag["return"])
+
 			print_good("#{host} has live sessions:\n#{result.chomp("\n")}") unless result.nil?
-        else
-            # Insufficient rights
-            print_error("#{host.ljust(16)} #{user} - Insufficient rights to enumerate (not local admin)") if datastore['VERBOSE']
-        end
-    end
+		else
+			# Insufficient rights
+			print_error("#{host.ljust(16)} - Insufficient rights to enumerate (not local admin on this device)") if datastore['VERBOSE']
+		end
+	end
 
 	# From enum_domain_group_users.rb by Carlos Perez and Stephen Haywood
 	# Run command, return results
