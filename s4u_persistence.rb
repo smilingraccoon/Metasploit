@@ -306,7 +306,7 @@ class Metasploit3 < Msf::Exploit::Local
 		temp_xml << "      <Enabled>true</Enabled>\n"
 		temp_xml << "      <Subscription>&lt;QueryList&gt;&lt;Query Id=\"0\" "
 		temp_xml << "Path=\"#{log}\"&gt;&lt;Select Path=\"#{log}\"&gt;"
-		temp_xml << line
+		temp_xml << "      #{line}"
 		temp_xml << "&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;"
 		temp_xml << "</Subscription>\n"
 		temp_xml << "    </EventTrigger>"
