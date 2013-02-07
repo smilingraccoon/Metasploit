@@ -44,7 +44,7 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>E:\\tInrgKdr.exe</Command>
+      <Command>COMMANDHERE</Command>
     </Exec>
   </Actions>
 </Task>
